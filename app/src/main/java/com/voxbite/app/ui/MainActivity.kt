@@ -1,19 +1,22 @@
 package com.voxbite.app.ui
 
+import com.voxbite.app.R
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import android.view.View
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import com.voxbite.app.R
 import com.voxbite.app.agent.IntentParser
 import com.voxbite.app.automation.VoxBiteAccessibilityService
 import com.voxbite.app.voice.VoiceInputManager
@@ -25,10 +28,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var tvStatus: TextView
     private lateinit var tvAccessibilityWarning: TextView
     private lateinit var fabMic: FloatingActionButton
-
     private lateinit var voiceInputManager: VoiceInputManager
     private lateinit var intentParser: IntentParser
     private lateinit var tts: TextToSpeech
+
+    private val TAG = "VoxBite"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,7 +66,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         voiceInputManager = VoiceInputManager(
             context = this,
             onListeningStart = {
-                updateStatus("🎤 Listening...")
+                updateStatus("Listening... Speak now!")
                 fabMic.backgroundTintList =
                     android.content.res.ColorStateList.valueOf(
                         ContextCompat.getColor(this, android.R.color.holo_red_light)
@@ -70,10 +74,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             },
             onResult = { spokenText ->
                 updateStatus("You said:\n\"$spokenText\"\n\nProcessing...")
-                fabMic.backgroundTintList =
-                    android.content.res.ColorStateList.valueOf(
-                        ContextCompat.getColor(this, android.R.color.holo_orange_light)
-                    )
                 processVoiceInput(spokenText)
             },
             onError = { error ->
@@ -86,51 +86,103 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun processVoiceInput(speech: String) {
         lifecycleScope.launch {
             try {
-                val intent = intentParser.parse(speech)
-                updateStatus("Got it! Opening ${intent.app
-                    .replaceFirstChar { it.uppercase() }}...")
+                val intent = intentParser.parseIntent(speech)
 
-                speak(
-                    if (intent.items.isNotEmpty())
-                        "Got it! Ordering ${intent.items
-                            .joinToString(" and ") { it.name }}"
-                    else "Processing your request"
-                )
+                // Show real error as Toast for debugging
+                if (intent.action == "error") {
+                    val errorMsg = intent.errorMessage ?: "Unknown error"
+                    Log.e(TAG, "IntentParser error: $errorMsg")
+                    Toast.makeText(this@MainActivity, "ERROR: $errorMsg", Toast.LENGTH_LONG).show()
+                    updateStatus("Error: $errorMsg")
+                    speak("Something went wrong. Please try again.")
+                    resetMicButton()
+                    return@launch
+                }
 
-                val service = VoxBiteAccessibilityService.instance
+                Log.d(TAG, "Intent: action=${intent.action} app=${intent.app} items=${intent.items}")
+
+                val appName = intent.app.replaceFirstChar { it.uppercase() }
 
                 when (intent.action) {
-                    "order_food", "search_product" -> {
+                    "order", "order_food" -> {
                         if (intent.items.isNotEmpty()) {
-                            service?.openSwiggyAndSearch(intent.items[0]) {
-                                service.clickAddButton {
-                                    speak("Done! ${intent.items[0].name} added to your cart.")
-                                    updateStatus("✅ Added to cart!")
-                                    resetMicButton()
-                                }
-                            }
+                            val itemName = intent.items[0].name
+                            val query = itemName.replace(" ", "+")
+
+                            speak("Got it! Opening Swiggy for $itemName.")
+                            updateStatus("Opening Swiggy for:\n$itemName\n\nTap Add to Cart in Swiggy")
+
+                            // Open Swiggy search via deep link
+                            val swiggyUri = Uri.parse("https://www.swiggy.com/search?query=$query")
+                            val swiggyIntent = Intent(Intent.ACTION_VIEW, swiggyUri)
+                            swiggyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(swiggyIntent)
+
+                        } else {
+                            speak("What would you like to order?")
+                            updateStatus("What would you like to order?\nTry: Order biryani from Swiggy")
                         }
+                        resetMicButton()
                     }
-                    "book_cab" -> {
-                        service?.openOlaForDestination(
-                            intent.destination ?: ""
-                        ) {
-                            speak("Opened Ola. Please confirm your pickup.")
-                            updateStatus("✅ Ola opened with destination!")
-                            resetMicButton()
+
+                    "book_cab", "navigate" -> {
+                        val destination = intent.destination ?: ""
+                        if (destination.isNotEmpty()) {
+                            speak("Opening Ola for $destination.")
+                            updateStatus("Opening Ola...\nDestination: $destination")
+
+                            // Open Ola via deep link
+                            val olaUri = Uri.parse("https://book.olacabs.com/?drop=$destination")
+                            val olaIntent = Intent(Intent.ACTION_VIEW, olaUri)
+                            olaIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(olaIntent)
+
+                        } else {
+                            speak("Where would you like to go?")
+                            updateStatus("Where to?\nTry: Book a cab to Koramangala")
                         }
+                        resetMicButton()
                     }
+
+                    "open" -> {
+                        speak("Opening $appName.")
+                        updateStatus("Opening $appName...")
+                        val launchIntent = packageManager.getLaunchIntentForPackage(
+                            getPackageName(intent.app)
+                        )
+                        if (launchIntent != null) {
+                            startActivity(launchIntent)
+                        } else {
+                            speak("$appName is not installed.")
+                            updateStatus("$appName is not installed on this device.")
+                        }
+                        resetMicButton()
+                    }
+
                     else -> {
-                        speak("I didn't understand. Try saying: Order Maggi from Swiggy")
-                        updateStatus("Try: \"Order Maggi from Swiggy\"")
+                        speak("I didn't understand. Try: Order biryani from Swiggy")
+                        updateStatus("Try saying:\n\"Order biryani from Swiggy\"\n\"Book a cab to airport\"")
                         resetMicButton()
                     }
                 }
+
             } catch (e: Exception) {
+                val errorMsg = e.message ?: "Unknown exception"
+                Log.e(TAG, "processVoiceInput crashed: $errorMsg", e)
+                Toast.makeText(this@MainActivity, "DEBUG: $errorMsg", Toast.LENGTH_LONG).show()
+                updateStatus("Error: $errorMsg")
                 speak("Something went wrong. Please try again.")
-                updateStatus("Error occurred. Try again.")
                 resetMicButton()
             }
+        }
+    }
+
+    private fun getPackageName(app: String): String {
+        return when (app.lowercase()) {
+            "swiggy" -> "in.swiggy.android"
+            "ola" -> "com.olacabs.customer"
+            "zomato" -> "com.application.zomato"
+            else -> app
         }
     }
 
@@ -174,7 +226,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
             tts.language = Locale("en", "IN")
-            speak("VoxBite is ready. Tap the mic and tell me what to do.")
+            speak("VoxBite ready. Tap mic and tell me what to do.")
         }
     }
 

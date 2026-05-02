@@ -1,6 +1,4 @@
-package com.example.voxbite.voice
-
-
+package com.voxbite.app.voice
 
 import android.content.Context
 import android.content.Intent
@@ -53,7 +51,6 @@ class VoiceInputManager(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
         }
-
         speechRecognizer?.startListening(intent)
     }
 

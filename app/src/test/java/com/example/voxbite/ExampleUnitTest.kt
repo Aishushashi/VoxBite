@@ -1,4 +1,4 @@
-package com.example.voxbite
+package com.voxbite.app
 
 import org.junit.Test
 

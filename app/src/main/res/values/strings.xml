@@ -1,7 +1,8 @@
 <resources>
     <string name="app_name">VoxBite</string>
     <string name="accessibility_service_description">
-        VoxBite needs accessibility access to complete tasks
-        on other apps on your behalf.
+        VoxBite needs accessibility access to complete tasks on other apps.
     </string>
+
+    <string name="gemini_api_key">YOUR_KEY_HERE</string>
 </resources>

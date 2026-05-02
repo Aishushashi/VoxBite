@@ -1,9 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.VoxBite" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <item name="colorPrimary">#FF6B00</item>
-        <item name="colorPrimaryVariant">#E55A00</item>
+        <item name="colorPrimaryVariant">#CC5500</item>
         <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#FF9800</item>
+        <item name="colorOnSecondary">#000000</item>
         <item name="android:statusBarColor">#0D0D0D</item>
         <item name="android:navigationBarColor">#0D0D0D</item>
+        <item name="android:windowBackground">#0D0D0D</item>
     </style>
 </resources>
