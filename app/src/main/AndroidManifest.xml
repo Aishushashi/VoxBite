@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- ADD THIS BLOCK — required on API 30+ to see other apps -->
+    <queries>
+        <package android:name="com.olacabs.customer" />
+        <package android:name="in.swiggy.android" />
+        <package android:name="com.application.zomato" />
+    </queries>
+
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+
+
+
 
     <application
         android:allowBackup="true"
