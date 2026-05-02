@@ -11,13 +11,11 @@ import java.net.URL
 
 class IntentParser {
 
-    private val apiKey = "AIzaSyBmz05L8gPMh7Z2elxPM3C76cFfhXNtIw8" // ← paste new key here
+    private val apiKey = "AIzaSyBmz05L8gPMh7Z2elxPM3C76cFfhXNtIw8" // ← your key here
     private val TAG = "VoxBite"
 
     suspend fun parseIntent(spokenText: String): UserIntent = withContext(Dispatchers.IO) {
         try {
-            // ✅ FIXED: added -latest to fix 404 error
-            // REPLACE the URL line with exactly this:
             val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
@@ -27,18 +25,28 @@ class IntentParser {
             connection.readTimeout = 15000
 
             val prompt = """
-                You are an intent parser for a voice agent app.
+                You are an intent parser for a voice agent app in India.
                 Parse this voice command and return ONLY valid JSON, no markdown, no explanation.
                 Voice command: "$spokenText"
 
                 Return exactly this format:
-                {"action":"order","app":"swiggy","items":[{"name":"biryani","quantity":1}],"destination":null}
+                {
+                  "action": "order",
+                  "app": "swiggy",
+                  "items": [{"name": "biryani", "quantity": 1}],
+                  "destination": null,
+                  "budget": null,
+                  "category": null
+                }
 
                 Rules:
-                - action: one of order, search, open, navigate
+                - action: one of order, book_cab, open, navigate
                 - app: one of swiggy, ola, zomato
-                - items: array of objects with name and quantity
-                - destination: string for ola rides, null otherwise
+                - items: array of objects with name and quantity. Extract ALL items mentioned.
+                - destination: string only for cab bookings, null otherwise
+                - budget: number in rupees if user says "under ₹150" or "below 200" etc, null if not mentioned
+                - category: if user says "something light" → "light", "something spicy" → "spicy", null otherwise
+                - If user says "something light under ₹150", set items to [] and use category + budget instead
             """.trimIndent()
 
             val requestBody = JSONObject().apply {
@@ -99,12 +107,20 @@ class IntentParser {
                 }
             }
 
+            val budget = if (intentJson.isNull("budget")) null
+            else intentJson.optInt("budget", 0).takeIf { it > 0 }
+
+            val category = if (intentJson.isNull("category")) null
+            else intentJson.optString("category", null)
+
             UserIntent(
                 action = intentJson.optString("action", "unknown"),
                 app = intentJson.optString("app", "unknown"),
                 items = parsedItems,
                 destination = intentJson.optString("destination", null).takeIf { it != "null" },
-                rawText = spokenText
+                rawText = spokenText,
+                budget = budget,
+                category = category
             )
 
         } catch (e: Exception) {

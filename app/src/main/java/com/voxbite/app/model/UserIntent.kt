@@ -6,10 +6,12 @@ data class UserIntent(
     val items: List<OrderItem> = emptyList(),
     val destination: String? = null,
     val rawText: String = "",
-    val errorMessage: String? = null   // ← added
+    val errorMessage: String? = null,
+    val budget: Int? = null,       // ← new: e.g. 150 for "under ₹150"
+    val category: String? = null   // ← new: e.g. "light", "spicy"
 ) {
     companion object {
-        fun error(message: String) = UserIntent(  // ← added
+        fun error(message: String) = UserIntent(
             action = "error",
             app = "none",
             errorMessage = message

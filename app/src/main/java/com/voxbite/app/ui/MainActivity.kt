@@ -107,12 +107,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     "order", "order_food" -> {
                         if (intent.items.isNotEmpty()) {
                             val itemName = intent.items[0].name
-                            val query = itemName.replace(" ", "+")
+                            val query = intent.items.joinToString("+") {
+                                it.name.replace(" ", "+")
+                            }
 
-                            speak("Got it! Opening Swiggy for $itemName.")
-                            updateStatus("Opening Swiggy for:\n$itemName\n\nTap Add to Cart in Swiggy")
+                            // Build spoken confirmation with all items
+                            val itemsList = intent.items.joinToString(" and ") { it.name }
+                            val budgetText = if (intent.budget != null) " under ₹${intent.budget}" else ""
+                            speak("Got it! Opening Swiggy for $itemsList$budgetText.")
+                            updateStatus("Opening Swiggy for:\n$itemsList$budgetText\n\nTap Add to Cart in Swiggy")
 
-                            // Open Swiggy search via deep link
+                            val swiggyUri = Uri.parse("https://www.swiggy.com/search?query=$query")
+                            val swiggyIntent = Intent(Intent.ACTION_VIEW, swiggyUri)
+                            swiggyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(swiggyIntent)
+
+                        } else if (intent.category != null || intent.budget != null) {
+                            // User said "something light under ₹150" — no specific item
+                            val category = intent.category ?: "food"
+                            val budgetText = if (intent.budget != null) " under ₹${intent.budget}" else ""
+                            val query = category.replace(" ", "+")
+
+                            speak("Opening Swiggy for $category$budgetText.")
+                            updateStatus("Opening Swiggy for:\n$category$budgetText\n\nBrowse and pick what you like!")
+
                             val swiggyUri = Uri.parse("https://www.swiggy.com/search?query=$query")
                             val swiggyIntent = Intent(Intent.ACTION_VIEW, swiggyUri)
                             swiggyIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -120,7 +138,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
                         } else {
                             speak("What would you like to order?")
-                            updateStatus("What would you like to order?\nTry: Order biryani from Swiggy")
+                            updateStatus("What would you like to order?\nTry: Order biryani from Swiggy\nOr: Order something light under ₹150")
                         }
                         resetMicButton()
                     }
