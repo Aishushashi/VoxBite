@@ -1,11 +1,13 @@
 package com.voxbite.app.ui
 
-import com.voxbite.app.R
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.util.Log
@@ -16,12 +18,90 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.voxbite.app.R
 import com.voxbite.app.agent.IntentParser
+import com.voxbite.app.agent.RecommendationEngine
 import com.voxbite.app.automation.VoxBiteAccessibilityService
+import com.voxbite.app.emergency.EmergencyManager
+import com.voxbite.app.model.UserIntent
 import com.voxbite.app.voice.VoiceInputManager
 import kotlinx.coroutines.launch
 import java.util.Locale
+
+// ─── Translation helper ───────────────────────────────────────────────────────
+
+object Translator {
+    fun ready(lang: String) = when (lang) {
+        "hi-IN" -> "तैयार हूँ! क्या करना है?\nकहें: बिरयानी ऑर्डर करो"
+        "kn-IN" -> "ಸಿದ್ಧವಾಗಿದ್ದೇನೆ! ಏನು ಮಾಡಬೇಕು?\nಹೇಳಿ: ಬಿರಿಯಾನಿ ಆರ್ಡರ್ ಮಾಡಿ"
+        else    -> "Ready! What would you like to do?\nTry: Order biryani from Swiggy"
+    }
+    fun listening(lang: String) = when (lang) {
+        "hi-IN" -> "🎙️ सुन रहा हूँ... बोलिए!"
+        "kn-IN" -> "🎙️ ಕೇಳುತ್ತಿದ್ದೇನೆ... ಮಾತನಾಡಿ!"
+        else    -> "🎙️ Listening... Speak now!"
+    }
+    fun processing(lang: String, speech: String) = when (lang) {
+        "hi-IN" -> "आपने कहा:\n\"$speech\"\n\nसमझ रहा हूँ..."
+        "kn-IN" -> "ನೀವು ಹೇಳಿದ್ದು:\n\"$speech\"\n\nಅರ್ಥ ಮಾಡಿಕೊಳ್ಳುತ್ತಿದ್ದೇನೆ..."
+        else    -> "You said:\n\"$speech\"\n\nProcessing..."
+    }
+    fun searchingFood(lang: String, item: String) = when (lang) {
+        "hi-IN" -> "🍽️ स्विगी पर $item खोज रहा हूँ..."
+        "kn-IN" -> "🍽️ ಸ್ವಿಗ್ಗಿಯಲ್ಲಿ $item ಹುಡುಕುತ್ತಿದ್ದೇನೆ..."
+        else    -> "🍽️ Finding $item on Swiggy..."
+    }
+    fun bookingCab(lang: String, dest: String) = when (lang) {
+        "hi-IN" -> "🚗 $dest के लिए ओला खोल रहा हूँ..."
+        "kn-IN" -> "🚗 $dest ಗೆ ಓಲಾ ತೆರೆಯುತ್ತಿದ್ದೇನೆ..."
+        else    -> "🚗 Opening Ola → $dest..."
+    }
+    fun chainingMessage(lang: String, item: String, dest: String) = when (lang) {
+        "hi-IN" -> "🔗 $item ऑर्डर करने के बाद $dest के लिए कैब बुक करूँगा..."
+        "kn-IN" -> "🔗 $item ಆರ್ಡರ್ ಮಾಡಿದ ನಂತರ $dest ಗೆ ಕ್ಯಾಬ್ ಬುಕ್ ಮಾಡುತ್ತೇನೆ..."
+        else    -> "🔗 Ordering $item, then booking cab to $dest..."
+    }
+    fun noItem(lang: String) = when (lang) {
+        "hi-IN" -> "क्या ऑर्डर करना है?"
+        "kn-IN" -> "ಏನು ಆರ್ಡರ್ ಮಾಡಬೇಕು?"
+        else    -> "What would you like to order?"
+    }
+    fun noDest(lang: String) = when (lang) {
+        "hi-IN" -> "कहाँ जाना है?"
+        "kn-IN" -> "ಎಲ್ಲಿಗೆ ಹೋಗಬೇಕು?"
+        else    -> "Where do you want to go?"
+    }
+    fun notInstalled(lang: String, app: String) = when (lang) {
+        "hi-IN" -> "$app इंस्टॉल नहीं है।"
+        "kn-IN" -> "$app ಇನ್ಸ್ಟಾಲ್ ಆಗಿಲ್ಲ."
+        else    -> "$app is not installed."
+    }
+    fun notUnderstood(lang: String) = when (lang) {
+        "hi-IN" -> "समझ नहीं आया। कहें: बिरयानी ऑर्डर करो"
+        "kn-IN" -> "ಅರ್ಥವಾಗಲಿಲ್ಲ. ಹೇಳಿ: ಬಿರಿಯಾನಿ ಆರ್ಡರ್ ಮಾಡಿ"
+        else    -> "I didn't understand. Try: Order biryani from Swiggy"
+    }
+    fun somethingWrong(lang: String) = when (lang) {
+        "hi-IN" -> "कुछ गड़बड़ हो गई। फिर से कोशिश करें।"
+        "kn-IN" -> "ಏನೋ ತಪ್ಪಾಯಿತು. ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ."
+        else    -> "Something went wrong. Please try again."
+    }
+    fun sosConfirm(lang: String) = when (lang) {
+        "hi-IN" -> "ठीक है, आपकी लोकेशन आपके संपर्कों को भेज रहा हूँ। अस्पताल खोज रहा हूँ।"
+        "kn-IN" -> "ಸರಿ, ನಿಮ್ಮ ಸ್ಥಳವನ್ನು ಕಳುಹಿಸುತ್ತಿದ್ದೇನೆ. ಆಸ್ಪತ್ರೆ ಹುಡುಕುತ್ತಿದ್ದೇನೆ."
+        else    -> "Okay, sending your location to emergency contacts and finding nearest hospital."
+    }
+    fun sosNoContacts(lang: String) = when (lang) {
+        "hi-IN" -> "कोई आपातकालीन संपर्क नहीं है। पहले सेटअप करें।"
+        "kn-IN" -> "ತುರ್ತು ಸಂಪರ್ಕಗಳು ಇಲ್ಲ. ಮೊದಲು ಸೆಟಪ್ ಮಾಡಿ."
+        else    -> "No emergency contacts set up. Please set them up first."
+    }
+}
+
+// ─── MainActivity ─────────────────────────────────────────────────────────────
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
@@ -31,31 +111,49 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var voiceInputManager: VoiceInputManager
     private lateinit var intentParser: IntentParser
     private lateinit var tts: TextToSpeech
+    private lateinit var emergencyManager: EmergencyManager
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
 
-    private val TAG = "VoxBite"
+    private val recommender = RecommendationEngine()
 
-    private val PKG_OLA = "com.olacabs.customer"
-    private val PKG_SWIGGY = "in.swiggy.android"
-    private val PKG_ZOMATO = "com.application.zomato"
+    private var lastDetectedLang = "en-IN"
+    private var ttsReady = false
+
+    private var pendingChainDestination: String? = null
+    private var pendingChainLang: String = "en-IN"
+
+    companion object {
+        const val PKG_OLA        = "com.olacabs.customer"
+        const val PKG_SWIGGY     = "in.swiggy.android"
+        const val PKG_ZOMATO     = "com.application.zomato"
+        const val TAG            = "VoxBite"
+        const val CHAIN_DELAY_MS = 5000L
+        const val PERMISSION_REQUEST_CODE = 101
+    }
+
+    // ─── Lifecycle ────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        tvStatus = findViewById(R.id.tv_status)
+        tvStatus               = findViewById(R.id.tv_status)
         tvAccessibilityWarning = findViewById(R.id.tv_accessibility_warning)
-        fabMic = findViewById(R.id.fab_mic)
+        fabMic                 = findViewById(R.id.fab_mic)
 
-        intentParser = IntentParser()
-        tts = TextToSpeech(this, this)
+        intentParser        = IntentParser()
+        tts                 = TextToSpeech(this, this)
+        emergencyManager    = EmergencyManager(this)
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         setupVoiceManager()
         checkPermissions()
+        requestRuntimePermissions()
 
-        // DEBUG — remove these 3 lines after confirming Toast says "Ola visible: true"
-        val isOlaVisible = packageManager.getLaunchIntentForPackage(PKG_OLA) != null
-        Log.d(TAG, "Ola visible to app: $isOlaVisible")
-        Toast.makeText(this, "Ola visible: $isOlaVisible", Toast.LENGTH_SHORT).show()
+        val olaVisible = packageManager.getLaunchIntentForPackage(PKG_OLA) != null
+        Log.d(TAG, "Ola visible: $olaVisible")
+        // TEMP: open setup screen to add contacts
+        startActivity(Intent(this, EmergencySetupActivity::class.java))
 
         fabMic.setOnClickListener {
             if (!VoxBiteAccessibilityService.isConnected) {
@@ -66,23 +164,61 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             voiceInputManager.startListening()
         }
 
-        tvAccessibilityWarning.setOnClickListener {
-            openAccessibilitySettings()
+        tvAccessibilityWarning.setOnClickListener { openAccessibilitySettings() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (VoxBiteAccessibilityService.isConnected) {
+            tvAccessibilityWarning.visibility = View.GONE
+        }
+        pendingChainDestination?.let { dest ->
+            pendingChainDestination = null
+            Handler(Looper.getMainLooper()).postDelayed({
+                launchOla(dest, pendingChainLang)
+            }, 1000L)
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        voiceInputManager.stopListening()
+        tts.shutdown()
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            tts.language = Locale("en", "IN")
+            ttsReady = true
+            speakWelcomeWithRecommendation()
+        }
+    }
+
+    // ─── Welcome + Smart Recommendation ──────────────────────────────────────
+
+    private fun speakWelcomeWithRecommendation() {
+        val greeting       = recommender.getGreeting(lastDetectedLang)
+        val recommendation = recommender.getSpokenRecommendation(lastDetectedLang)
+        speak(greeting)
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (recommendation.isNotBlank()) speak(recommendation)
+        }, 2500L)
+    }
+
+    // ─── Voice Manager ────────────────────────────────────────────────────────
 
     private fun setupVoiceManager() {
         voiceInputManager = VoiceInputManager(
             context = this,
             onListeningStart = {
-                updateStatus("Listening... Speak now!")
+                updateStatus(Translator.listening(lastDetectedLang))
                 fabMic.backgroundTintList =
                     android.content.res.ColorStateList.valueOf(
                         ContextCompat.getColor(this, android.R.color.holo_red_light)
                     )
             },
             onResult = { spokenText ->
-                updateStatus("You said:\n\"$spokenText\"\n\nProcessing...")
+                updateStatus(Translator.processing(lastDetectedLang, spokenText))
                 processVoiceInput(spokenText)
             },
             onError = { error ->
@@ -92,170 +228,294 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         )
     }
 
+    // ─── Voice Processing Pipeline ────────────────────────────────────────────
+
     private fun processVoiceInput(speech: String) {
         lifecycleScope.launch {
             try {
                 val intent = intentParser.parseIntent(speech)
+                lastDetectedLang = intent.detectedLanguage
 
                 if (intent.action == "error") {
-                    // ✅ FIXED: was intent.errorMessage — now uses confirmationMessage
-                    val errorMsg = intent.confirmationMessage.ifBlank { "Unknown error" }
-                    Log.e(TAG, "IntentParser error: $errorMsg")
-                    Toast.makeText(this@MainActivity, "ERROR: $errorMsg", Toast.LENGTH_LONG).show()
-                    updateStatus("Error: $errorMsg")
-                    speak("Something went wrong. Please try again.")
+                    val msg = intent.confirmationMessage.ifBlank {
+                        Translator.somethingWrong(intent.detectedLanguage)
+                    }
+                    Log.e(TAG, "Error: $msg")
+                    Toast.makeText(this@MainActivity, "ERROR: $msg", Toast.LENGTH_LONG).show()
+                    updateStatus("⚠️ $msg")
+                    speak(msg, intent.detectedLanguage)
                     resetMicButton()
                     return@launch
                 }
 
                 if (intent.action == "start_over") {
-                    // ✅ speaks in detected language
-                    speak(intent.confirmationMessage.ifBlank { "Okay, starting over. What would you like to do?" }, intent.detectedLanguage)
-                    updateStatus("Ready! What would you like to do?\nTry: Order biryani from Swiggy")
+                    val msg = intent.confirmationMessage.ifBlank {
+                        Translator.ready(intent.detectedLanguage)
+                    }
+                    speak(msg, intent.detectedLanguage)
+                    updateStatus(Translator.ready(intent.detectedLanguage))
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        val rec = recommender.getSpokenRecommendation(intent.detectedLanguage)
+                        if (rec.isNotBlank()) speak(rec, intent.detectedLanguage)
+                    }, 2000L)
                     resetMicButton()
                     return@launch
                 }
 
-                val correctionPrefix = if (intent.isCorrection) "Got it, changing that!\n" else ""
-
-                Log.d(TAG, "Intent: action=${intent.action} app=${intent.app} items=${intent.items} destination=${intent.destination} budget=${intent.budget} correction=${intent.isCorrection} lang=${intent.detectedLanguage}")
+                Log.d(TAG, "Intent: action=${intent.action} items=${intent.items} " +
+                        "dest=${intent.destination} lang=${intent.detectedLanguage}")
 
                 when (intent.action) {
-                    "order", "order_food" -> handleFoodOrder(intent, correctionPrefix)
-                    "book_cab", "navigate" -> handleCabBooking(intent, correctionPrefix)
-                    "open" -> handleOpenApp(intent)
+                    "order", "order_food"  -> handleFoodOrder(intent)
+                    "book_cab", "navigate" -> handleCabBooking(intent)
+                    "open"                 -> handleOpenApp(intent)
+                    "chain"                -> handleChainedCommand(intent)
+                    "emergency"            -> handleEmergency(intent.detectedLanguage)
                     else -> {
-                        speak("I didn't understand. Try: Order biryani from Swiggy")
-                        updateStatus("Try saying:\n\"Order biryani from Swiggy\"\n\"Order something light under ₹150\"\n\"Book a cab to Koramangala\"")
+                        val msg = Translator.notUnderstood(intent.detectedLanguage)
+                        speak(msg, intent.detectedLanguage)
+                        updateStatus(msg)
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            val rec = recommender.getSpokenRecommendation(intent.detectedLanguage)
+                            if (rec.isNotBlank()) speak(rec, intent.detectedLanguage)
+                        }, 2500L)
                         resetMicButton()
                     }
                 }
 
             } catch (e: Exception) {
-                val errorMsg = e.message ?: "Unknown exception"
-                Log.e(TAG, "processVoiceInput crashed: $errorMsg", e)
-                Toast.makeText(this@MainActivity, "DEBUG: $errorMsg", Toast.LENGTH_LONG).show()
-                updateStatus("Error: $errorMsg")
-                speak("Something went wrong. Please try again.")
+                val msg = e.message ?: "Unknown exception"
+                Log.e(TAG, "Crash: $msg", e)
+                Toast.makeText(this@MainActivity, "DEBUG: $msg", Toast.LENGTH_LONG).show()
+                updateStatus("Error: $msg")
+                speak(Translator.somethingWrong(lastDetectedLang), lastDetectedLang)
                 resetMicButton()
             }
         }
     }
 
-    private fun handleFoodOrder(intent: com.voxbite.app.model.UserIntent, correctionPrefix: String) {
-        if (intent.items.isNotEmpty()) {
-            val query = intent.items.joinToString("+") { it.name.replace(" ", "+") }
-            val itemsList = intent.items.joinToString(" and ") { it.name }
-            val budgetText = if (intent.budget != null) " under ₹${intent.budget}" else ""
+    // ═══════════════════════════════════════════════════════════════
+    //  EMERGENCY / SOS
+    // ═══════════════════════════════════════════════════════════════
 
-            // ✅ speaks confirmationMessage in user's language
-            speak(intent.confirmationMessage.ifBlank {
-                if (intent.isCorrection)
-                    "Sure! Changed to $itemsList$budgetText. Opening Swiggy now."
-                else
-                    "Got it! Opening Swiggy for $itemsList$budgetText."
-            }, intent.detectedLanguage)
+    private fun handleEmergency(lang: String) {
+        val contacts = emergencyManager.getContacts()
 
-            updateStatus("${correctionPrefix}Opening Swiggy for:\n$itemsList$budgetText\n\nTap Add to Cart in Swiggy")
-            openUrl("https://www.swiggy.com/search?query=$query")
-
-        } else if (intent.category != null || intent.budget != null) {
-            val category = intent.category ?: "food"
-            val budgetText = if (intent.budget != null) " under ₹${intent.budget}" else ""
-            val query = category.replace(" ", "+")
-
-            // ✅ speaks confirmationMessage in user's language
-            speak(intent.confirmationMessage.ifBlank {
-                if (intent.isCorrection)
-                    "Sure! Changed to $category$budgetText. Opening Swiggy."
-                else
-                    "Opening Swiggy for $category$budgetText."
-            }, intent.detectedLanguage)
-
-            updateStatus("${correctionPrefix}Opening Swiggy for:\n$category$budgetText\n\nBrowse and pick what you like!")
-            openUrl("https://www.swiggy.com/search?query=$query")
-
-        } else {
-            speak(intent.confirmationMessage.ifBlank { "What would you like to order?" }, intent.detectedLanguage)
-            updateStatus("What would you like to order?\nTry: Order biryani from Swiggy\nOr: Order something light under ₹150")
-        }
-        resetMicButton()
-    }
-
-    private fun handleCabBooking(intent: com.voxbite.app.model.UserIntent, correctionPrefix: String) {
-        val destination = intent.destination
-
-        if (destination.isNullOrBlank()) {
-            speak(intent.confirmationMessage.ifBlank { "Where would you like to go?" }, intent.detectedLanguage)
-            updateStatus("Where to?\nTry: Book a cab to Koramangala\nOr: Book a cab to airport")
+        if (contacts.isEmpty()) {
+            val msg = Translator.sosNoContacts(lang)
+            speak(msg, lang)
+            updateStatus("⚠️ $msg")
+            // Open setup screen so user can add contacts immediately
+            Handler(Looper.getMainLooper()).postDelayed({
+                startActivity(Intent(this, EmergencySetupActivity::class.java))
+            }, 2000L)
             resetMicButton()
             return
         }
 
-        // ✅ speaks confirmationMessage in user's language
-        speak(intent.confirmationMessage.ifBlank {
-            if (intent.isCorrection)
-                "Sure! Changed destination to $destination. Opening Ola."
-            else
-                "Opening Ola for $destination."
-        }, intent.detectedLanguage)
+        val confirmMsg = Translator.sosConfirm(lang)
+        speak(confirmMsg, lang)
+        updateStatus("🆘 SOS activated — sending location...")
+        Log.d(TAG, "SOS triggered in language: $lang")
 
-        updateStatus("${correctionPrefix}Opening Ola...\nDestination: $destination")
-
-        val olaLaunchIntent = packageManager.getLaunchIntentForPackage(PKG_OLA)
-
-        if (olaLaunchIntent != null) {
-            Log.d(TAG, "Ola found via getLaunchIntentForPackage — launching")
-            olaLaunchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(olaLaunchIntent)
-            updateStatus("Ola opened!\nEnter destination: $destination")
-
-        } else {
-            Log.d(TAG, "getLaunchIntentForPackage returned null — trying fallback")
-
-            val fallbackIntent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                setPackage(PKG_OLA)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-
-            val resolvedActivities = packageManager.queryIntentActivities(fallbackIntent, 0)
-
-            if (resolvedActivities.isNotEmpty()) {
-                Log.d(TAG, "Ola found via fallback — launching")
-                startActivity(fallbackIntent)
-                updateStatus("Ola opened!\nEnter destination: $destination")
-
-            } else {
-                Log.d(TAG, "Ola not found — opening Play Store")
-                speak("Ola app is not installed. Opening Play Store to install it.")
-                updateStatus("Ola not installed.\nOpening Play Store...")
-
-                try {
-                    val marketIntent = Intent(
-                        Intent.ACTION_VIEW,
-                        Uri.parse("market://details?id=$PKG_OLA")
-                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                    startActivity(marketIntent)
-                } catch (e: Exception) {
-                    val webIntent = Intent(
-                        Intent.ACTION_VIEW,
-                        Uri.parse("https://play.google.com/store/apps/details?id=$PKG_OLA")
-                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                    startActivity(webIntent)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            == PackageManager.PERMISSION_GRANTED) {
+            fusedLocationClient.lastLocation
+                .addOnSuccessListener { location: Location? ->
+                    emergencyManager.sendSosMessages(location)
+                    emergencyManager.openNearestHospital(location)
+                    Log.d(TAG, "SOS sent with location: ${location?.latitude}, ${location?.longitude}")
                 }
-            }
+                .addOnFailureListener {
+                    Log.e(TAG, "Location fetch failed: ${it.message}")
+                    emergencyManager.sendSosMessages(null)
+                    emergencyManager.openNearestHospital(null)
+                }
+        } else {
+            // No location permission — still send SMS, just without coordinates
+            emergencyManager.sendSosMessages(null)
+            emergencyManager.openNearestHospital(null)
         }
 
         resetMicButton()
     }
 
-    private fun handleOpenApp(intent: com.voxbite.app.model.UserIntent) {
-        val appName = intent.app.replaceFirstChar { it.uppercase() }
-        val pkg = getPackageNameForApp(intent.app)
+    // ═══════════════════════════════════════════════════════════════
+    //  CHAINED COMMAND
+    // ═══════════════════════════════════════════════════════════════
 
-        // ✅ speaks confirmationMessage in user's language
-        speak(intent.confirmationMessage.ifBlank { "Opening $appName." }, intent.detectedLanguage)
+    private fun handleChainedCommand(intent: UserIntent) {
+        val lang  = intent.detectedLanguage
+        val chain = intent.chainData
+
+        if (chain == null) {
+            val msg = Translator.notUnderstood(lang)
+            speak(msg, lang); updateStatus(msg); resetMicButton(); return
+        }
+        if (chain.foodItems.isEmpty()) {
+            val msg = Translator.noItem(lang)
+            speak(msg, lang); updateStatus(msg); resetMicButton(); return
+        }
+        if (chain.destination.isBlank()) {
+            val msg = Translator.noDest(lang)
+            speak(msg, lang); updateStatus(msg); resetMicButton(); return
+        }
+
+        val firstItem = chain.foodItems[0].name
+        recommender.recordCommand(firstItem)
+
+        val confirmMsg = intent.confirmationMessage.ifBlank {
+            Translator.chainingMessage(lang, firstItem, chain.destination)
+        }
+        speak(confirmMsg, lang)
+        updateStatus(Translator.chainingMessage(lang, firstItem, chain.destination))
+
+        VoxBiteAccessibilityService.pendingSwiggyItem = firstItem
+        VoxBiteAccessibilityService.swiggyState =
+            VoxBiteAccessibilityService.SwiggyState.SEARCHING
+
+        val swiggyIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://www.swiggy.com/search?query=${Uri.encode(firstItem)}")
+        ).apply {
+            setPackage(PKG_SWIGGY)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            startActivity(swiggyIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Swiggy not installed: ${e.message}")
+            speak(Translator.notInstalled(lang, "Swiggy"), lang)
+            resetMicButton(); return
+        }
+
+        pendingChainDestination = chain.destination
+        pendingChainLang        = lang
+
+        Handler(Looper.getMainLooper()).postDelayed({
+            pendingChainDestination?.let { dest ->
+                pendingChainDestination = null
+                launchOla(dest, lang)
+            }
+        }, CHAIN_DELAY_MS)
+
+        resetMicButton()
+    }
+
+    // ─── Shared Ola launcher ──────────────────────────────────────────────────
+
+    private fun launchOla(destination: String, lang: String) {
+        val olaInstalled = packageManager.getLaunchIntentForPackage(PKG_OLA) != null
+        if (!olaInstalled) {
+            speak(Translator.notInstalled(lang, "Ola"), lang)
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$PKG_OLA")))
+            return
+        }
+
+        VoxBiteAccessibilityService.pendingOlaDestination = destination
+        VoxBiteAccessibilityService.olaState =
+            VoxBiteAccessibilityService.OlaState.APP_OPEN
+
+        updateStatus(Translator.bookingCab(lang, destination))
+
+        val deepIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("olacabs://book?drop=${Uri.encode(destination)}")
+        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+
+        if (deepIntent.resolveActivity(packageManager) != null) {
+            startActivity(deepIntent)
+        } else {
+            val launchIntent = packageManager.getLaunchIntentForPackage(PKG_OLA)!!
+                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            startActivity(launchIntent)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  SWIGGY
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun handleFoodOrder(intent: UserIntent) {
+        val lang  = intent.detectedLanguage
+        val items = intent.items
+
+        if (items.isEmpty()) {
+            val msg = Translator.noItem(lang)
+            speak(msg, lang); updateStatus(msg); resetMicButton(); return
+        }
+
+        val firstItem = items[0].name
+        recommender.recordCommand(firstItem)
+
+        VoxBiteAccessibilityService.pendingSwiggyItem = firstItem
+        VoxBiteAccessibilityService.swiggyState =
+            VoxBiteAccessibilityService.SwiggyState.SEARCHING
+
+        val confirmMsg = intent.confirmationMessage.ifBlank {
+            Translator.searchingFood(lang, firstItem)
+        }
+        speak(confirmMsg, lang)
+        updateStatus(Translator.searchingFood(lang, firstItem))
+
+        val swiggyIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://www.swiggy.com/search?query=${Uri.encode(firstItem)}")
+        ).apply {
+            setPackage(PKG_SWIGGY)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            startActivity(swiggyIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Swiggy not installed: ${e.message}")
+            speak(Translator.notInstalled(lang, "Swiggy"), lang)
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$PKG_SWIGGY"))
+            )
+        }
+        resetMicButton()
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  OLA
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun handleCabBooking(intent: UserIntent) {
+        val lang        = intent.detectedLanguage
+        val destination = intent.destination.orEmpty().trim()
+
+        if (destination.isBlank()) {
+            val msg = Translator.noDest(lang)
+            speak(msg, lang); updateStatus(msg); resetMicButton(); return
+        }
+
+        val confirmMsg = intent.confirmationMessage.ifBlank {
+            Translator.bookingCab(lang, destination)
+        }
+        speak(confirmMsg, lang)
+        launchOla(destination, lang)
+        resetMicButton()
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  OPEN APP
+    // ═══════════════════════════════════════════════════════════════
+
+    private fun handleOpenApp(intent: UserIntent) {
+        val lang    = intent.detectedLanguage
+        val appName = intent.app.replaceFirstChar { it.uppercase() }
+        val pkg     = when (intent.app.lowercase()) {
+            "swiggy" -> PKG_SWIGGY
+            "ola"    -> PKG_OLA
+            "zomato" -> PKG_ZOMATO
+            else     -> intent.app
+        }
+
+        val msg = intent.confirmationMessage.ifBlank { "Opening $appName." }
+        speak(msg, lang)
         updateStatus("Opening $appName...")
 
         val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
@@ -263,65 +523,42 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(launchIntent)
         } else {
-            speak("$appName is not installed.")
-            updateStatus("$appName is not installed on this device.")
+            speak(Translator.notInstalled(lang, appName), lang)
         }
         resetMicButton()
     }
 
-    private fun openUrl(url: String) {
-        val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        startActivity(webIntent)
-    }
+    // ─── Helpers ──────────────────────────────────────────────────────────────
 
-    private fun getPackageNameForApp(app: String): String {
-        return when (app.lowercase()) {
-            "swiggy" -> PKG_SWIGGY
-            "ola"    -> PKG_OLA
-            "zomato" -> PKG_ZOMATO
-            else     -> app
-        }
-    }
-
-    // ✅ Single speak() function — handles all 3 languages
     private fun speak(text: String, languageCode: String = "en-IN") {
+        if (!ttsReady) return
         val locale = when (languageCode) {
             "hi-IN" -> Locale("hi", "IN")
             "kn-IN" -> Locale("kn", "IN")
             else    -> Locale("en", "IN")
         }
         val result = tts.setLanguage(locale)
-        if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            Log.w(TAG, "TTS language $languageCode not supported, falling back to English")
-            tts.setLanguage(Locale("en", "IN"))
+        if (result == TextToSpeech.LANG_MISSING_DATA ||
+            result == TextToSpeech.LANG_NOT_SUPPORTED) {
+            tts.language = Locale("en", "IN")
         }
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "voxbite_tts")
+        tts.speak(text, TextToSpeech.QUEUE_ADD, null, "voxbite_tts")
     }
 
-    private fun updateStatus(text: String) {
-        runOnUiThread { tvStatus.text = text }
-    }
+    private fun updateStatus(text: String) = runOnUiThread { tvStatus.text = text }
 
-    private fun resetMicButton() {
-        runOnUiThread {
-            fabMic.backgroundTintList =
-                android.content.res.ColorStateList.valueOf(
-                    ContextCompat.getColor(this, android.R.color.holo_orange_dark)
-                )
-        }
+    private fun resetMicButton() = runOnUiThread {
+        fabMic.backgroundTintList =
+            android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(this, android.R.color.holo_orange_dark)
+            )
     }
 
     private fun checkPermissions() {
-        if (ContextCompat.checkSelfPermission(
-                this, Manifest.permission.RECORD_AUDIO
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.RECORD_AUDIO),
-                100
+                this, arrayOf(Manifest.permission.RECORD_AUDIO), 100
             )
         }
         if (!VoxBiteAccessibilityService.isConnected) {
@@ -329,27 +566,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun openAccessibilitySettings() {
+    private fun requestRuntimePermissions() {
+        val needed = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
+            != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.SEND_SMS)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED)
+            needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (needed.isNotEmpty())
+            ActivityCompat.requestPermissions(this, needed.toTypedArray(), PERMISSION_REQUEST_CODE)
+    }
+
+    private fun openAccessibilitySettings() =
         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-    }
-
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            tts.language = Locale("en", "IN")
-            speak("VoxBite ready. Tap mic and tell me what to do.")
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (VoxBiteAccessibilityService.isConnected) {
-            tvAccessibilityWarning.visibility = View.GONE
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        voiceInputManager.stopListening()
-        tts.shutdown()
-    }
 }

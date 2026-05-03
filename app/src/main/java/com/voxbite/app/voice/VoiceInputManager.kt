@@ -2,6 +2,7 @@ package com.voxbite.app.voice
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -14,90 +15,83 @@ class VoiceInputManager(
     private val onResult: (String) -> Unit,
     private val onError: (String) -> Unit
 ) {
-
+    private val TAG = "VoxBiteVoice"
     private var speechRecognizer: SpeechRecognizer? = null
-    private val TAG = "VoxBite"
 
-    // Supported languages — English (India), Hindi, Kannada
-    // IETF language tags used by Android SpeechRecognizer
-    private val supportedLanguages = listOf("en-IN", "hi-IN", "kn-IN")
+    init {
+        setupRecognizer()
+    }
 
-    fun startListening() {
-        stopListening()
-
+    private fun setupRecognizer() {
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
 
             override fun onReadyForSpeech(params: Bundle?) {
+                Log.d(TAG, "Ready for speech")
                 onListeningStart()
             }
 
             override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val matches = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 if (!matches.isNullOrEmpty()) {
-                    val spokenText = matches[0]
-                    Log.d(TAG, "STT result: $spokenText")
-                    onResult(spokenText)
+                    val spoken = matches[0]
+                    Log.d(TAG, "Result: $spoken")
+                    onResult(spoken)
                 } else {
-                    onError("Could not hear anything. Please try again.")
+                    onError("Could not understand. Please try again.")
                 }
             }
 
             override fun onError(error: Int) {
-                val message = when (error) {
-                    SpeechRecognizer.ERROR_AUDIO             -> "Audio recording error"
-                    SpeechRecognizer.ERROR_CLIENT            -> "Client error"
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission missing"
-                    SpeechRecognizer.ERROR_NETWORK           -> "Network error — check internet"
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT   -> "Network timeout — check internet"
-                    SpeechRecognizer.ERROR_NO_MATCH          -> "Could not understand. Try again."
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY   -> "Recognizer busy. Try again."
-                    SpeechRecognizer.ERROR_SERVER            -> "Server error. Try again."
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT    -> "No speech detected. Tap mic and try again."
-                    else                                     -> "Unknown error code: $error"
+                val msg = when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH        -> "No speech detected. Try again."
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT  -> "Listening timed out. Try again."
+                    SpeechRecognizer.ERROR_NETWORK         -> "Network error. Check connection."
+                    SpeechRecognizer.ERROR_AUDIO           -> "Audio error. Check microphone."
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy. Wait a moment."
+                    else                                   -> "Speech error ($error). Try again."
                 }
-                Log.e(TAG, "STT error: $message (code=$error)")
-                onError(message)
+                Log.e(TAG, "STT error $error: $msg")
+                onError(msg)
             }
 
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBeginningOfSpeech()               { Log.d(TAG, "Speaking started") }
+            override fun onEndOfSpeech()                     { Log.d(TAG, "Speaking ended") }
             override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
+            override fun onPartialResults(partial: Bundle?)  {}
+            override fun onRmsChanged(rmsdB: Float)          {}
+            override fun onEvent(type: Int, params: Bundle?) {}
         })
+    }
 
-        // Build the recognizer intent with multilingual support
-        val recognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-
-            // Primary model — enhanced for Indian accents
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-
-            // Primary language — English India
+    fun startListening() {
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-IN")
 
-            // Extra languages — Hindi and Kannada
-            // Android will auto-detect which language is being spoken
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-IN")
-            putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", arrayOf("hi-IN", "kn-IN"))
+            // EXTRA_ADDITIONAL_LANGUAGES requires API 33+ — guard it
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                putExtra(
+                    "android.speech.extra.ADDITIONAL_LANGUAGES",
+                    arrayOf("hi-IN", "kn-IN")
+                )
+            }
 
-            // Prefer offline recognition if available (faster, works without internet)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-
-            // Get only the top result
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-
-            putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         }
-
-        Log.d(TAG, "Starting STT — languages: ${supportedLanguages.joinToString(", ")}")
-        speechRecognizer?.startListening(recognizerIntent)
+        speechRecognizer?.startListening(intent)
+        Log.d(TAG, "Started listening")
     }
 
     fun stopListening() {
         speechRecognizer?.stopListening()
         speechRecognizer?.destroy()
         speechRecognizer = null
+        Log.d(TAG, "Stopped listening")
     }
 }

@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ADD THIS BLOCK — required on API 30+ to see other apps -->
+    <!-- Required on API 30+ to see other apps -->
     <queries>
         <package android:name="com.olacabs.customer" />
         <package android:name="in.swiggy.android" />
         <package android:name="com.application.zomato" />
+        <package android:name="com.google.android.apps.maps" />
     </queries>
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
-
-
-
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:allowBackup="true"
@@ -24,14 +24,30 @@
         android:theme="@style/Theme.VoxBite"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- SPLASH — entry point -->
         <activity
-            android:name=".ui.MainActivity"
-            android:exported="true">
+            android:name=".ui.SplashActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.VoxBite">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- MAIN — no longer the launcher -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- EMERGENCY SETUP -->
+        <activity
+            android:name=".ui.EmergencySetupActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            android:label="Emergency Setup" />
 
         <service
             android:name=".automation.VoxBiteAccessibilityService"
